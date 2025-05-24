@@ -1,0 +1,99 @@
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Container-Scanning.gitlab-ci.yml
+
+variables:
+  APP_PORT: "8080"
+  EXPOSED_PORT: "80"
+
+stages:
+  - test
+  - download-dependencies
+  - dependency-scan
+  - package
+  - containerize
+  - container-scan
+  - deploy
+  
+build-and-test:
+  stage: test
+  image: maven:3.9.9-eclipse-temurin-17
+  script:
+    - mvn test
+
+download-dependencies:
+  stage: download-dependencies
+  image: maven:3.9.9-eclipse-temurin-17
+  script:
+    - mvn -Dmaven.repo.local=.m2/repository dependency:go-offline
+  cache:
+    key: maven-cache
+    paths:
+      - .m2/repository
+  artifacts:
+    paths:
+      - .m2/repository
+    expire_in: 1 hour
+
+dependency-scan:
+  stage: dependency-scan
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  dependencies:
+    - download-dependencies
+  script:
+    - ls -la .m2/repository
+    - trivy fs --exit-code 1 --severity HIGH,CRITICAL .m2/repository
+  cache:
+    key: maven-cache
+    paths:
+      - .m2/repository
+
+package:
+  stage: package
+  image: maven:3.9.9-eclipse-temurin-17
+  script:
+    - mvn package
+  artifacts:
+    paths:
+      - target/*.jar
+    expire_in: 1 hour
+    
+containerize:
+  stage: containerize
+  image: docker:latest
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+  script:
+    - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
+    - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA .
+    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+
+container_scanning:
+  stage: container-scan
+  variables:
+    CS_IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+  dependencies:
+    - containerize
+
+deploy:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache openssh
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - mkdir -p ~/.ssh
+    - echo -e "Host *\n\tStrictHostKeyChecking no\n" > ~/.ssh/config
+  script:
+    - |
+      ssh $SSH_USER@$SSH_HOST "
+        docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY &&
+        docker pull $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA &&
+        docker stop my-app || true &&
+        docker rm my-app || true &&
+        docker run -d --name my-app -p $EXPOSED_PORT:$APP_PORT $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+      "
+  dependencies:
+    - containerize
