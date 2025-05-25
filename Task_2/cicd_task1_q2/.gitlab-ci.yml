@@ -1,0 +1,56 @@
+image: node:18
+
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+
+stages:
+  - install
+  - lint
+  - test
+  - build
+  - deploy
+
+cache:
+  paths:
+    - node_modules/
+
+install_dependencies:
+  stage: install
+  script:
+    - npm install
+  artifacts:
+    paths:
+      - node_modules/
+      - package-lock.json
+    expire_in: 1 hour
+
+lint:
+  stage: lint
+  script:
+    - npx eslint . --ext .js,.jsx
+
+unit_test:
+  stage: test
+  script:
+    - npm test -- --watchAll=false
+
+build:
+  stage: build
+  script:
+    - npm run build
+  artifacts:
+    paths:
+      - build/
+
+deploy:
+  stage: deploy
+  script:
+    - mv build public
+  artifacts:
+    paths:
+      - public
+  # This tells GitLab this job deploys Pages content
+  pages:
+    # Publish the "public" folder as the website root
+    publish: public
