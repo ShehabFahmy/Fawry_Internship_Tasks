@@ -1,0 +1,84 @@
+variables:
+  ECR_REPO_NAME: "poc-prod-ecr"
+  NODE_PORT: "30080"
+  WORKER_NODE_PUBLIC_IP: "54.146.211.66"
+
+stages:
+  - package
+  - dockerize-and-push
+  - deploy
+  - smoke-test
+
+build-test-package:
+  stage: package
+  image: maven:3.9.9-eclipse-temurin-17
+  script:
+    - cd App
+    - mvn package
+  artifacts:
+    paths:
+      - App/target/*.jar
+    expire_in: 1 hour
+    
+dockerize-and-push:
+  stage: dockerize-and-push
+  image: docker:latest
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+  before_script:
+    - apk add --no-cache aws-cli
+  script:
+    - export ECR_URL="${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/${ECR_REPO_NAME}"
+    - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$ECR_URL"
+    - docker build -t "$ECR_URL:$CI_COMMIT_SHA" ./App
+    - docker push "$ECR_URL:$CI_COMMIT_SHA"
+
+deploy:
+  stage: deploy
+  image:
+    name: amazon/aws-cli:2.15.39
+    entrypoint: [""]
+  before_script:
+    - echo "$KUBECONFIG_CONTENT" > kubeconfig
+    - export KUBECONFIG=$CI_PROJECT_DIR/kubeconfig
+    - yum install -y curl
+    # Download and install kubectl
+    - KUBECTL_VERSION="v1.30.1"
+    - curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+    - install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+  script:
+    - export ECR_URL="${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com"
+    - export IMAGE="${ECR_URL}/${ECR_REPO_NAME}:$CI_COMMIT_SHA"
+    # Get ECR credentials
+    - export ECR_PASSWORD=$(aws ecr get-login-password --region us-east-1)
+    # Create or update the Kubernetes imagePullSecret
+    - kubectl delete secret ecr-access --ignore-not-found
+    - kubectl create secret docker-registry ecr-access --docker-server=$ECR_URL --docker-username=AWS --docker-password="$ECR_PASSWORD" --docker-email=none@example.com
+    # Apply manifests
+    - kubectl apply -f K8s/
+    # Patch deployment image
+    - kubectl set image deployment/my-app my-app-container=$IMAGE
+  only:
+    - main
+
+smoke-test:
+  stage: smoke-test
+  image: curlimages/curl:latest
+  script:
+    - echo "Waiting for app to become healthy..."
+    - |
+      i=1
+      while [ $i -le 10 ]; do
+        if curl -f http://$WORKER_NODE_PUBLIC_IP:30080/actuator/health; then
+          echo "✅ App is healthy."
+          exit 0
+        else
+          echo "⏳ Attempt $i: App not healthy yet. Retrying in 5 seconds..."
+          sleep 5
+        fi
+        i=$((i + 1))
+      done
+      echo "❌ App failed to become healthy after multiple attempts."
+      exit 1
+  dependencies:
+    - deploy

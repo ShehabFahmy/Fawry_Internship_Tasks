@@ -1,0 +1,16 @@
+---
+# tasks file for roles/k3s_agent
+- name: Install K3s agent
+  shell: curl -sfL https://get.k3s.io | sh -
+  args:
+    creates: /etc/rancher/k3s/k3s-agent.yaml
+  environment:
+    INSTALL_K3S_EXEC: "--node-name {{ inventory_hostname }} --node-external-ip={{ ansible_host }}"
+    K3S_URL: "https://{{ hostvars['controlplane']['private_ip'] }}:6443"
+    K3S_TOKEN: "{{ NODE_TOKEN }}"
+    
+- name: Label worker node in Kubernetes
+  command: >
+    kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/worker=worker --overwrite
+  delegate_to: controlplane
+  run_once: false

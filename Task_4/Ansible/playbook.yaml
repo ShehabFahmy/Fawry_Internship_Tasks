@@ -1,0 +1,22 @@
+---
+- name: Prepare nodes
+  hosts: all
+  become: true
+  roles:
+    - common
+
+- name: Install K3s on control plane
+  hosts: controlplanes
+  become: true
+  gather_facts: no
+  roles:
+    - k3s_control_plane
+
+- name: Join worker nodes
+  hosts: workers
+  become: true
+  gather_facts: no
+  vars_files:
+    - Secrets/ansible_secrets.yaml
+  roles:
+    - k3s_agent

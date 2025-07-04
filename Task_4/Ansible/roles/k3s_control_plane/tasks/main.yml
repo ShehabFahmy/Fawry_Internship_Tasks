@@ -1,0 +1,48 @@
+---
+# tasks file for roles/k3s_control_plane
+- name: Install K3s control plane
+  shell: |
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="\
+      --write-kubeconfig-mode 644 \
+      --node-name {{ inventory_hostname }} \
+      --node-external-ip={{ ansible_host }} \
+      --tls-san {{ ansible_host }} \
+      --tls-san {{ private_ip }} \
+      --bind-address=0.0.0.0" sh -
+  args:
+    creates: /etc/rancher/k3s/k3s.yaml
+
+- name: Read K3s node-token
+  command: cat /var/lib/rancher/k3s/server/node-token
+  register: token_output
+
+- name: Ensure secrets file exists (unencrypted)
+  copy:
+    dest: Secrets/ansible_secrets.yaml
+    content: ""
+    force: no
+  delegate_to: localhost
+  become: false
+
+- name: Decrypt secrets file
+  command: >
+    ansible-vault decrypt Secrets/ansible_secrets.yaml
+  delegate_to: localhost
+  become: false
+  failed_when: false   # prevents failure on an empty or unencrypted file.
+  register: decrypt_result
+
+- name: Set or update node_token line
+  lineinfile:
+    path: Secrets/ansible_secrets.yaml
+    regexp: '^NODE_TOKEN:'
+    line: "NODE_TOKEN: {{ token_output.stdout }}"
+    create: yes
+  delegate_to: localhost
+  become: false
+
+- name: Re-encrypt secrets file
+  command: >
+    ansible-vault encrypt Secrets/ansible_secrets.yaml
+  delegate_to: localhost
+  become: false
