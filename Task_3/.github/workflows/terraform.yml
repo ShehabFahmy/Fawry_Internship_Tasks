@@ -1,0 +1,39 @@
+name: Terraform Deployment
+
+on:
+  push:
+    branches:
+      - pre-prod
+      - prod
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write      # Required for OIDC
+      contents: read       # Required for checkout
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsOIDCRole
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+
+      - name: Terraform Init
+        run: terraform -chdir=envs/${{ github.ref_name }} init
+
+      - name: Terraform Plan
+        run: terraform -chdir=envs/${{ github.ref_name }} plan -var-file=terraform.tfvars
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/pre-prod' || github.ref == 'refs/heads/prod'
+        run: terraform -chdir=envs/${{ github.ref_name }} apply -auto-approve -var-file=terraform.tfvars
+
