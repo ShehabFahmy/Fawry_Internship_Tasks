@@ -1,0 +1,32 @@
+version: '3'
+services:
+  flaskapp:
+    build: ./flaskapp
+    image: shehabfahmy/fawry-k8s-project-flaskapp:latest
+    environment:
+      MYSQL_DATABASE_USER: "root"
+      MYSQL_DATABASE_PASSWORD: "root"
+      MYSQL_DATABASE_DB: "BucketList"
+      MYSQL_DATABASE_HOST: "db-service"
+    ports:
+      - "5000:5002"
+    depends_on:
+      - db-service
+    networks:
+      - app-tier
+      - db-tier
+
+  db-service:
+    build: ./mysql
+    image: shehabfahmy/fawry-k8s-project-mysql:latest
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: "root"
+    # volumes:
+      # - "/mnt/data/mysql:/var/lib/mysql"
+    networks:
+      - db-tier
+
+networks:
+  app-tier:
+  db-tier:
